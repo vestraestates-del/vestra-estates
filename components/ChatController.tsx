@@ -1,7 +1,6 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { CloseIcon, SendIcon, MicrophoneIcon, StopCircleIcon } from './icons/EliteIcons';
-import { GoogleGenAI, Chat } from '@google/genai';
 import type { PortfolioItem } from '../data/portfolioData';
 import type { ArtItem } from '../data/artData';
 import type { RentalItem } from '../data/rentalsData';
@@ -36,7 +35,6 @@ const ChatController: React.FC<ChatControllerProps> = (props) => {
     const [isChatOpen, setIsChatOpen] = useState(false);
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState('');
-    const [chat, setChat] = useState<Chat | null>(null);
     const [loading, setLoading] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const { t, language } = useLocalization();
@@ -86,14 +84,8 @@ const ChatController: React.FC<ChatControllerProps> = (props) => {
             circleMembers: props.members.map(m => ({ name: m.name, title: m.title, company: m.company, interests: m.interests }))
         }
     }, [props, t]);
-
-    useEffect(() => {
-        const initChat = async () => {
-          if (chat) return;
-          setLoading(true);
-          try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
-            const systemInstruction = `You are Aura, the premier AI Concierge for VESTRA ESTATES, designed for an elite clientele. Your persona is that of a seasoned, discreet, and highly articulate Senior Partner at a world-class real estate consultancy. Your communication must be sophisticated, insightful, and always client-centric.
+    
+    const systemInstruction = useMemo(() => `You are Aura, the premier AI Concierge for VESTRA ESTATES, designed for an elite clientele. Your persona is that of a seasoned, discreet, and highly articulate Senior Partner at a world-class real estate consultancy. Your communication must be sophisticated, insightful, and always client-centric.
 
 --- VESTRA ESTATES PRIVATE DATA CONTEXT ---
 ${JSON.stringify(siteContext, null, 2)}
@@ -114,17 +106,25 @@ ${JSON.stringify(siteContext, null, 2)}
         - **Data Analysis:** When asked to interpret data (e.g., "What's the outlook on my portfolio?"), provide a top-line summary followed by key takeaways, just as a senior financial advisor would.
 
 3.  **Handling Boundaries:**
-    - **Out-of-Scope Queries:** If a query cannot be answered using the provided context, gracefully decline while maintaining your professional persona. Example: "My expertise is centered on the VESTRA portfolio and its associated services. For matters outside this scope, I would be pleased to refer you to one of our human specialists."`;
+    - **Out-of-Scope Queries:** If a query cannot be answered using the provided context, gracefully decline while maintaining your professional persona. Example: "My expertise is centered on the VESTRA portfolio and its associated services. For matters outside this scope, I would be pleased to refer you to one of our human specialists."`, [siteContext]);
 
-            const chatSession = ai.chats.create({ model: 'gemini-2.5-flash', config: { systemInstruction } });
-            setChat(chatSession);
+    useEffect(() => {
+        const initChat = async () => {
+          if (messages.length > 0) return;
+          setLoading(true);
+          try {
+            const contents = [{ role: 'user', parts: [{ text: 'initiate' }] }];
+            
+            const response = await fetch('/api/generate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contents, systemInstruction }),
+            });
+            if (!response.ok) throw new Error('API request failed');
 
-            if (messages.length === 0) {
-                const result = await chatSession.sendMessageStream({ message: "initiate" });
-                let botResponse = '';
-                for await (const chunk of result) { botResponse += chunk.text; }
-                setMessages([{ sender: 'bot', text: botResponse }]);
-            }
+            const data = await response.json();
+            setMessages([{ sender: 'bot', text: data.text }]);
+
           } catch (error) {
             console.error("Failed to initialize Aura:", error);
             setMessages([{ sender: 'bot', text: 'My apologies, I am currently experiencing a system malfunction. Please try again shortly.' }]);
@@ -135,7 +135,7 @@ ${JSON.stringify(siteContext, null, 2)}
         if (isChatOpen) {
           initChat();
         }
-    }, [isChatOpen, siteContext, t, messages.length]); // Added messages.length to avoid re-initiation on context change
+    }, [isChatOpen, systemInstruction, messages.length]);
     
     // --- Speech Recognition Setup ---
     useEffect(() => {
@@ -195,30 +195,36 @@ ${JSON.stringify(siteContext, null, 2)}
     }, [messages]);
 
     const handleSend = async () => {
-        if (!input.trim() || !chat || loading) return;
+        if (!input.trim() || loading) return;
         if (isRecording) {
             recognitionRef.current?.stop();
         }
 
         const userMessage: Message = { sender: 'user', text: input };
-        setMessages((prev) => [...prev, userMessage]);
+        const currentMessages = [...messages, userMessage];
+        setMessages(currentMessages);
         setInput('');
         setLoading(true);
 
         try {
-            const result = await chat.sendMessageStream({ message: input });
-            let botResponse = '';
-            setMessages((prev) => [...prev, { sender: 'bot', text: '' }]);
+            const contents = currentMessages.map(msg => ({
+                role: msg.sender === 'user' ? 'user' : 'model',
+                parts: [{ text: msg.text }]
+            }));
             
-            for await (const chunk of result) {
-                botResponse += chunk.text;
-                setMessages((prev) => {
-                    const newMessages = [...prev];
-                    newMessages[newMessages.length - 1] = { ...newMessages[newMessages.length - 1], text: botResponse };
-                    return newMessages;
-                });
-            }
+            const response = await fetch('/api/generate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contents, systemInstruction }),
+            });
+
+            if (!response.ok) throw new Error('API request failed');
+
+            const data = await response.json();
+            const botMessage: Message = { sender: 'bot', text: data.text };
+            setMessages(prev => [...prev, botMessage]);
             setHasUnread(true);
+
         } catch (error) {
             console.error('Error sending message:', error);
             setMessages((prev) => [...prev, { sender: 'bot', text: 'I encountered an issue. Please try again later.' }]);

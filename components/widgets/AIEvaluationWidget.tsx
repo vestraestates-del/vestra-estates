@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { GoogleGenAI } from '@google/genai';
 import WidgetCard from '../ui/WidgetCard';
 import { AIIcon } from '../icons/EliteIcons';
 import type { PortfolioItem } from '../../data/portfolioData';
@@ -38,8 +37,6 @@ const AIEvaluationWidget: React.FC<AIEvaluationWidgetProps> = ({ property }) => 
       setEvaluation('');
       setError('');
       try {
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
-        
         const propertyName = t(property.nameKey);
         const propertyLocation = t(property.locationKey);
         const propertyDescription = t(property.descriptionKey);
@@ -64,14 +61,27 @@ const AIEvaluationWidget: React.FC<AIEvaluationWidgetProps> = ({ property }) => 
           Maintain a sophisticated, data-driven, and confidential tone. Do not use markdown formatting. Structure the response with clear headings.
         `;
         
-        const response = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt });
-        const resultText = response.text;
+        const response = await fetch('/api/generate', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ prompt }),
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Failed to fetch AI evaluation');
+        }
+
+        const data = await response.json();
+        const resultText = data.text;
         setEvaluation(resultText);
         evaluationCache.set(cacheKey, resultText);
 
       } catch (err: any) {
         console.error("AI evaluation error:", err);
-        const errorMessage = String(err);
+        const errorMessage = String(err.message);
         if (errorMessage.includes('429') || errorMessage.includes('RESOURCE_EXHAUSTED')) {
           setError(t('widgets.errors.rateLimit'));
         } else {

@@ -2,7 +2,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import type { CircleMember } from '../data/circleData';
 import { CloseIcon, SendIcon } from './icons/EliteIcons';
-import { GoogleGenAI, Chat } from '@google/genai';
 import type { PortfolioItem } from '../data/portfolioData';
 import type { ArtItem } from '../data/artData';
 import type { RentalItem } from '../data/rentalsData';
@@ -38,7 +37,6 @@ interface MemberChatWindowProps {
 const MemberChatWindow: React.FC<MemberChatWindowProps> = ({ member, onClose, portfolioItems, artCollection, specialRentals, watchCollection, automobileCollection, jewelCollection, agendaItems, requestItems, onNewMessage }) => {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
-  const [chat, setChat] = useState<Chat | null>(null);
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { t } = useLocalization();
@@ -81,16 +79,11 @@ const MemberChatWindow: React.FC<MemberChatWindowProps> = ({ member, onClose, po
     }
   }, [portfolioItems, artCollection, specialRentals, watchCollection, automobileCollection, jewelCollection, agendaItems, requestItems, t]);
 
-  useEffect(() => {
-    const initChat = async () => {
-      setLoading(true);
-      try {
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
-        
-        const salutation = member.gender === 'male' ? 'Mr.' : member.gender === 'female' ? 'Ms.' : '';
-        const lastName = member.name.split(' ').pop();
-        
-        const systemInstruction = `You are Aura, an AI Concierge from VESTRA ESTATES, facilitating a secure, asynchronous communication channel between two esteemed members of The Circle: the user and ${member.name}.
+   const systemInstruction = useMemo(() => {
+    const salutation = member.gender === 'male' ? 'Mr.' : member.gender === 'female' ? 'Ms.' : '';
+    const lastName = member.name.split(' ').pop();
+    
+    return `You are Aura, an AI Concierge from VESTRA ESTATES, facilitating a secure, asynchronous communication channel between two esteemed members of The Circle: the user and ${member.name}.
 
 Your role is to act as a professional and discreet intermediary. You will answer the user's questions on behalf of ${member.name}, using *only* the information available within the shared VESTRA ESTATES knowledge base. You are essentially acting as an intelligent, informed representative for ${member.name}.
 
@@ -112,24 +105,25 @@ ${JSON.stringify(siteContext, null, 2)}
     - If a query is personal, speculative, or requires scheduling (e.g., "Can we meet for lunch?", "What does ${member.name} think of the current market?"), you MUST gracefully redirect.
     - **Mandatory Response for Out-of-Scope Queries:** "That inquiry requires personal attention. I have logged your request and forwarded it directly to ${salutation} ${lastName}'s executive assistant for their consideration."
     - **Never** attempt to answer personal questions or make up information. Your boundary is the provided knowledge base.`;
+   }, [member, siteContext]);
 
-        const chatSession = ai.chats.create({
-          model: 'gemini-2.5-flash',
-          config: {
-            systemInstruction,
-          },
+  useEffect(() => {
+    const initChat = async () => {
+      if (messages.length > 0) return;
+      setLoading(true);
+      try {
+        const contents = [{ role: 'user', parts: [{ text: 'initiate' }] }];
+        
+        const response = await fetch('/api/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents, systemInstruction }),
         });
-        setChat(chatSession);
+        if (!response.ok) throw new Error('API request failed');
 
-        if (messages.length === 0) {
-            const result = await chatSession.sendMessageStream({ message: "initiate" });
-            let botResponse = '';
-            for await (const chunk of result) {
-                botResponse += chunk.text;
-            }
-            setMessages([{ sender: 'bot', text: botResponse, timestamp: new Date() }]);
-        }
-
+        const data = await response.json();
+        setMessages([{ sender: 'bot', text: data.text, timestamp: new Date() }]);
+        
       } catch (error) {
         console.error("Failed to initialize member chat:", error);
         setMessages([{ sender: 'bot', text: 'Apologies, this communication channel is currently unavailable.', timestamp: new Date() }]);
@@ -138,41 +132,41 @@ ${JSON.stringify(siteContext, null, 2)}
       }
     };
     initChat();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [member.id]); // Re-initialize chat only when the member ID changes.
+  }, [member.id, systemInstruction, messages.length]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
   const handleSend = async () => {
-    if (!input.trim() || !chat || loading) return;
+    if (!input.trim() || loading) return;
 
     const userMessage: Message = { sender: 'user', text: input, timestamp: new Date() };
-    setMessages((prev) => [...prev, userMessage]);
+    const currentMessages = [...messages, userMessage];
+    setMessages(currentMessages);
     setInput('');
     setLoading(true);
 
     try {
-      const result = await chat.sendMessageStream({ message: input });
-      let botResponse = '';
-      setMessages((prev) => [...prev, { sender: 'bot', text: '', timestamp: new Date() }]);
+      const contents = currentMessages.map(msg => ({
+          role: msg.sender === 'user' ? 'user' : 'model',
+          parts: [{ text: msg.text }]
+      }));
       
-      let hasNotified = false;
-      for await (const chunk of result) {
-        if (!hasNotified) {
-          onNewMessage();
-          hasNotified = true;
-        }
-        botResponse += chunk.text;
-        setMessages((prev) => {
-          const newMessages = [...prev];
-          if(newMessages.length > 0) {
-            newMessages[newMessages.length - 1] = { ...newMessages[newMessages.length - 1], text: botResponse };
-          }
-          return newMessages;
-        });
-      }
+      onNewMessage();
+
+      const response = await fetch('/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents, systemInstruction }),
+      });
+
+      if (!response.ok) throw new Error('API request failed');
+
+      const data = await response.json();
+      const botMessage: Message = { sender: 'bot', text: data.text, timestamp: new Date() };
+      setMessages(prev => [...prev, botMessage]);
+
     } catch (error) {
       console.error('Error sending message:', error);
       setMessages((prev) => [...prev, { sender: 'bot', text: 'I encountered an issue. Please try again later.', timestamp: new Date() }]);

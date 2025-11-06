@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { GoogleGenAI } from '@google/genai';
 import { OffMarketProperty } from '../data/offMarketData';
 import { useLocalization } from '../localization/LocalizationContext';
 import { 
@@ -95,7 +94,6 @@ const OffMarketDetailModal: React.FC<OffMarketDetailModalProps> = ({ property, o
             setErrors(prev => ({ ...prev, [tab]: '' }));
 
             try {
-                const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
                 let prompt = '';
 
                 switch (tab) {
@@ -110,14 +108,25 @@ const OffMarketDetailModal: React.FC<OffMarketDetailModalProps> = ({ property, o
                         break;
                 }
 
-                const response = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt });
-                const resultText = response.text;
+                const response = await fetch('/api/generate', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ prompt }),
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || `Failed to generate ${tab} analysis`);
+                }
+
+                const data = await response.json();
+                const resultText = data.text;
                 setAnalyses(prev => ({ ...prev, [tab]: resultText }));
                 analysisCache.set(cacheKey, resultText);
 
             } catch (err: any) {
                 console.error(`AI analysis error for tab ${tab}:`, err);
-                const errorMessage = String(err);
+                const errorMessage = String(err.message);
                 if (errorMessage.includes('429') || errorMessage.includes('RESOURCE_EXHAUSTED')) {
                     setErrors(prev => ({ ...prev, [tab]: t('widgets.errors.rateLimit') }));
                 } else {

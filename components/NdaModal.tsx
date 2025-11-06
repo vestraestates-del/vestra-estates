@@ -3,7 +3,6 @@ import type { PortfolioItem } from '../data/portfolioData';
 import { CloseIcon, PencilSquareIcon } from './icons/EliteIcons';
 import Button from './ui/Button';
 import { useLocalization } from '../localization/LocalizationContext';
-import { GoogleGenAI } from '@google/genai';
 
 interface NdaModalProps {
     property: PortfolioItem;
@@ -34,7 +33,6 @@ const NdaModal: React.FC<NdaModalProps> = ({ property, onConfirm, onClose }) => 
             setLoading(true);
             setError('');
             try {
-                const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
                 const prompt = `
                     Generate a concise, one-page Non-Disclosure Agreement (NDA) for a potential client viewing a high-value real estate property. The tone should be formal, legally sound, but not overly intimidating.
 
@@ -53,14 +51,27 @@ const NdaModal: React.FC<NdaModalProps> = ({ property, onConfirm, onClose }) => 
                     - End with a concluding paragraph before the signature line.
                 `;
                 
-                const response = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt });
-                const resultText = response.text;
+                const response = await fetch('/api/generate', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({ prompt }),
+                });
+
+                if (!response.ok) {
+                  const errorData = await response.json();
+                  throw new Error(errorData.error || 'Failed to generate NDA text');
+                }
+
+                const data = await response.json();
+                const resultText = data.text;
                 setNdaText(resultText);
                 ndaCache.set(cacheKey, resultText);
 
             } catch (err: any) {
                 console.error("NDA generation error:", err);
-                const errorMessage = String(err);
+                const errorMessage = String(err.message);
                 if (errorMessage.includes('429') || errorMessage.includes('RESOURCE_EXHAUSTED')) {
                     setError(t('widgets.errors.rateLimit'));
                 } else {

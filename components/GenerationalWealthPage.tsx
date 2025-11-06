@@ -5,7 +5,6 @@ import { TreeIcon, BuildingKeyIcon, UsersGroupIcon, DiamondIcon, PlaneBoatIcon, 
 import Button from './ui/Button';
 // FIX: Added file extension to appData import
 import type { RequestItem } from '../data/appData.ts';
-import { GoogleGenAI } from '@google/genai';
 
 const iconMap: { [key in WealthService['icon']]: React.FC<React.SVGProps<SVGSVGElement>> } = {
     Tree: TreeIcon,
@@ -47,15 +46,26 @@ const GenerationalWealthPage: React.FC<GenerationalWealthPageProps> = ({ onAddRe
 
         setLoading(prev => ({...prev, [serviceId]: true }));
         try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
             const prompt = `You are a Senior Legacy Advisor at VESTRA ESTATES. Generate a concise, expert-level strategic primer on "${service.title}". The description is: "${service.description}". Focus on the key considerations, strategic benefits, and potential complexities relevant to an ultra-high-net-worth individual. The tone should be authoritative and insightful. Do not use markdown.`;
-            const response = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt });
-            const resultText = response.text;
+            
+            const response = await fetch('/api/generate', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ prompt }),
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Failed to generate briefing');
+            }
+            
+            const data = await response.json();
+            const resultText = data.text;
             setBriefings(prev => ({ ...prev, [serviceId]: resultText }));
             briefingCache.set(cacheKey, resultText);
         } catch (error: any) {
             console.error("AI Briefing Error:", error);
-            const errorMessage = String(error);
+            const errorMessage = String(error.message);
             if (errorMessage.includes('429') || errorMessage.includes('RESOURCE_EXHAUSTED')) {
                 setBriefings(prev => ({ ...prev, [serviceId]: t('widgets.errors.rateLimit') }));
             } else {
